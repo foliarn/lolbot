@@ -1,0 +1,3 @@
+"""
+Modules métier du bot
+"""

@@ -1,0 +1,140 @@
+"""
+Wrappers pour les endpoints de l'API Riot Games
+"""
+from typing import Optional, Dict, Any, List
+from config import RIOT_API_BASE, DEFAULT_REGION, ROUTING_REGION, CACHE_TTL
+
+
+class RiotEndpoints:
+    """Wrappers pour tous les endpoints Riot utilisés"""
+
+    def __init__(self, client):
+        self.client = client
+        self.platform_base = RIOT_API_BASE['platform']
+        self.regional_base = RIOT_API_BASE['regional']
+
+    # ==================== ACCOUNT-V1 ====================
+
+    async def get_account_by_riot_id(self, game_name: str, tag_line: str) -> Optional[Dict[str, Any]]:
+        """
+        Récupère le PUUID à partir du RiotID
+
+        Returns: {'puuid': str, 'gameName': str, 'tagLine': str}
+        """
+        url = f"{self.regional_base}/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}"
+        cache_key = f"account:riotid:{game_name}#{tag_line}"
+        return await self.client.request(url, cache_key, CACHE_TTL['REGISTERED_USER'])
+
+    # ==================== SUMMONER-V4 ====================
+
+    async def get_summoner_by_puuid(self, puuid: str) -> Optional[Dict[str, Any]]:
+        """
+        Récupère les informations du summoner à partir du PUUID
+
+        Returns: {'id': str, 'accountId': str, 'puuid': str, 'name': str, 'summonerLevel': int}
+        """
+        url = f"{self.platform_base}/lol/summoner/v4/summoners/by-puuid/{puuid}"
+        cache_key = f"summoner:puuid:{puuid}"
+        return await self.client.request(url, cache_key, CACHE_TTL['REGISTERED_USER'])
+
+    # ==================== LEAGUE-V4 ====================
+
+    async def get_league_entries(self, summoner_id: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        Récupère les rangs du joueur (Solo/Duo et Flex)
+
+        Returns: List of {'queueType': str, 'tier': str, 'rank': str, 'leaguePoints': int, 'wins': int, 'losses': int}
+        """
+        url = f"{self.platform_base}/lol/league/v4/entries/by-summoner/{summoner_id}"
+        cache_key = f"league:summoner:{summoner_id}"
+        return await self.client.request(url, cache_key, CACHE_TTL['RANK'])
+
+    # ==================== CHAMPION-MASTERY-V4 ====================
+
+    async def get_champion_masteries(self, puuid: str, count: int = 5) -> Optional[List[Dict[str, Any]]]:
+        """
+        Récupère les champions avec le plus de maîtrise
+
+        Returns: List of {'championId': int, 'championPoints': int, 'championLevel': int}
+        """
+        url = f"{self.platform_base}/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}/top?count={count}"
+        cache_key = f"mastery:puuid:{puuid}:top{count}"
+        return await self.client.request(url, cache_key, CACHE_TTL['MASTERY'])
+
+    async def get_champion_mastery(self, puuid: str, champion_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Récupère la maîtrise d'un champion spécifique
+
+        Returns: {'championId': int, 'championPoints': int, 'championLevel': int}
+        """
+        url = f"{self.platform_base}/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}/by-champion/{champion_id}"
+        cache_key = f"mastery:puuid:{puuid}:champion:{champion_id}"
+        return await self.client.request(url, cache_key, CACHE_TTL['MASTERY'])
+
+    # ==================== MATCH-V5 ====================
+
+    async def get_match_history(
+        self,
+        puuid: str,
+        start: int = 0,
+        count: int = 20,
+        queue: Optional[int] = None
+    ) -> Optional[List[str]]:
+        """
+        Récupère les IDs des derniers matchs
+
+        Args:
+            puuid: PUUID du joueur
+            start: Index de départ
+            count: Nombre de matchs
+            queue: Type de queue (420=SoloQ, 440=Flex, 700=Clash)
+
+        Returns: List of match IDs
+        """
+        url = f"{self.regional_base}/lol/match/v5/matches/by-puuid/{puuid}/ids?start={start}&count={count}"
+        if queue:
+            url += f"&queue={queue}"
+
+        cache_key = f"match_history:puuid:{puuid}:queue:{queue}:count:{count}"
+        return await self.client.request(url, cache_key, CACHE_TTL['MATCH_HISTORY'])
+
+    async def get_match(self, match_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Récupère les détails d'un match
+
+        Returns: Match data avec 'info' et 'metadata'
+        """
+        url = f"{self.regional_base}/lol/match/v5/matches/{match_id}"
+        cache_key = f"match:{match_id}"
+        return await self.client.request(url, cache_key, CACHE_TTL['MATCH_HISTORY'])
+
+    # ==================== SPECTATOR-V4 ====================
+
+    async def get_active_game(self, puuid: str) -> Optional[Dict[str, Any]]:
+        """
+        Récupère la partie en cours d'un joueur
+
+        Returns: Game data ou None si pas en partie
+        """
+        url = f"{self.platform_base}/lol/spectator/v4/active-games/by-summoner/{puuid}"
+        return await self.client.request(url, use_rate_limit=True)
+
+    # ==================== CLASH-V1 ====================
+
+    async def get_clash_player(self, summoner_id: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        Récupère les équipes Clash du joueur
+
+        Returns: List of {'teamId': str, 'position': str, 'role': str}
+        """
+        url = f"{self.platform_base}/lol/clash/v1/players/by-summoner/{summoner_id}"
+        return await self.client.request(url, use_rate_limit=True)
+
+    async def get_clash_team(self, team_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Récupère les détails d'une équipe Clash
+
+        Returns: {'id': str, 'name': str, 'players': [...]}
+        """
+        url = f"{self.platform_base}/lol/clash/v1/teams/{team_id}"
+        return await self.client.request(url, use_rate_limit=True)
