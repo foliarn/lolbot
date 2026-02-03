@@ -34,7 +34,9 @@ class StatsModule:
         """
         # Cas 1: Utilisateur avec compte lié
         if discord_id and not riot_id:
+            print(f"[Stats] Looking up user: discord_id={repr(discord_id)}, alias={repr(alias)}")
             user = await self.db.get_user(discord_id, alias)
+            print(f"[Stats] User found: {user}")
             if not user:
                 return None, "Aucun compte lié. Utilisez `/link` d'abord."
 
@@ -64,13 +66,17 @@ class StatsModule:
         else:
             return None, "Fournissez un RiotID ou liez votre compte avec `/link`."
 
-        # Récupérer les données
+        # Récupérer les données du summoner (niveau, etc.)
         summoner = await self.api.get_summoner_by_puuid(puuid)
-        ranks = await self.api.get_league_entries(summoner_id)
-        masteries = await self.api.get_champion_masteries(puuid, 3)
-
         if not summoner:
             return None, "Impossible de récupérer les données du summoner."
+
+        # Récupérer les rangs via PUUID (nouvel endpoint Riot API)
+        print(f"[Stats] Récupération des rangs pour puuid: {puuid}")
+        ranks = await self.api.get_league_entries_by_puuid(puuid)
+        print(f"[Stats] Rangs reçus: {ranks}")
+
+        masteries = await self.api.get_champion_masteries(puuid, 3)
 
         # Convertir les IDs de champions en noms
         champion_names = {}

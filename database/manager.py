@@ -58,17 +58,20 @@ class DatabaseManager:
             db.row_factory = aiosqlite.Row
 
             if alias:
+                print(f"[DB] Query: SELECT * FROM users WHERE discord_id = {repr(discord_id)} AND account_alias = {repr(alias)}")
                 cursor = await db.execute(
                     "SELECT * FROM users WHERE discord_id = ? AND account_alias = ?",
                     (discord_id, alias)
                 )
             else:
+                print(f"[DB] Query: SELECT * FROM users WHERE discord_id = {repr(discord_id)} AND is_primary = 1")
                 cursor = await db.execute(
                     "SELECT * FROM users WHERE discord_id = ? AND is_primary = 1",
                     (discord_id,)
                 )
 
             row = await cursor.fetchone()
+            print(f"[DB] Result: {dict(row) if row else None}")
             return dict(row) if row else None
 
     async def get_all_users(self, discord_id: str) -> List[Dict[str, Any]]:
@@ -116,80 +119,6 @@ class DatabaseManager:
                 await db.commit()
 
             return True
-
-    # ==================== Subscriptions ====================
-
-    async def add_subscription(self, discord_id: str, champion_name: str) -> bool:
-        """Ajoute un abonnement à un champion"""
-        async with aiosqlite.connect(self.db_path) as db:
-            try:
-                await db.execute(
-                    "INSERT INTO subscriptions (discord_id, champion_name) VALUES (?, ?)",
-                    (discord_id, champion_name)
-                )
-                await db.commit()
-                return True
-            except aiosqlite.IntegrityError:
-                return False
-
-    async def remove_subscription(self, discord_id: str, champion_name: str) -> bool:
-        """Supprime un abonnement à un champion"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "DELETE FROM subscriptions WHERE discord_id = ? AND champion_name = ?",
-                (discord_id, champion_name)
-            )
-            await db.commit()
-            return cursor.rowcount > 0
-
-    async def get_subscriptions(self, discord_id: str) -> List[str]:
-        """Récupère tous les abonnements d'un utilisateur"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT champion_name FROM subscriptions WHERE discord_id = ?",
-                (discord_id,)
-            )
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
-
-    async def get_subscribers(self, champion_name: str) -> List[str]:
-        """Récupère tous les utilisateurs abonnés à un champion"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT discord_id FROM subscriptions WHERE champion_name = ?",
-                (champion_name,)
-            )
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
-
-    async def get_all_subscribers(self) -> List[str]:
-        """Récupère tous les utilisateurs ayant au moins un abonnement"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT DISTINCT discord_id FROM subscriptions WHERE champion_name = 'ALL'"
-            )
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
-
-    # ==================== Patch Version ====================
-
-    async def get_patch_version(self) -> Optional[str]:
-        """Récupère la version du patch actuel"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT version FROM patch_version ORDER BY id DESC LIMIT 1"
-            )
-            row = await cursor.fetchone()
-            return row[0] if row else None
-
-    async def update_patch_version(self, version: str):
-        """Met à jour la version du patch"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT INTO patch_version (version) VALUES (?)",
-                (version,)
-            )
-            await db.commit()
 
     # ==================== Cache ====================
 
@@ -253,3 +182,80 @@ class DatabaseManager:
                 (f"%{pattern}%",)
             )
             await db.commit()
+
+    # ==================== Rank History ====================
+
+    async def save_rank_snapshot(
+        self,
+        riot_puuid: str,
+        queue_type: str,
+        tier: str,
+        rank: str,
+        league_points: int,
+        wins: int,
+        losses: int
+    ):
+        """Sauvegarde un snapshot du rang d'un joueur"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO rank_history
+                (riot_puuid, queue_type, tier, rank, league_points, wins, losses)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (riot_puuid, queue_type, tier, rank, league_points, wins, losses)
+            )
+            await db.commit()
+
+    async def get_rank_at_time(
+        self,
+        riot_puuid: str,
+        queue_type: str,
+        target_time: str
+    ) -> Optional[Dict[str, Any]]:
+        """Recupere le rang d'un joueur a un moment donne (le plus proche avant target_time)"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """SELECT * FROM rank_history
+                WHERE riot_puuid = ? AND queue_type = ? AND recorded_at <= ?
+                ORDER BY recorded_at DESC LIMIT 1""",
+                (riot_puuid, queue_type, target_time)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_latest_rank(
+        self,
+        riot_puuid: str,
+        queue_type: str
+    ) -> Optional[Dict[str, Any]]:
+        """Recupere le dernier rang enregistre d'un joueur"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """SELECT * FROM rank_history
+                WHERE riot_puuid = ? AND queue_type = ?
+                ORDER BY recorded_at DESC LIMIT 1""",
+                (riot_puuid, queue_type)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_all_registered_puuids(self) -> List[str]:
+        """Recupere tous les PUUIDs des utilisateurs enregistres"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT DISTINCT riot_puuid FROM users"
+            )
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
+    async def get_user_by_puuid(self, riot_puuid: str) -> Optional[Dict[str, Any]]:
+        """Recupere un utilisateur par son PUUID"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM users WHERE riot_puuid = ? LIMIT 1",
+                (riot_puuid,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None

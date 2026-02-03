@@ -44,3 +44,6 @@ wheels/
 
 # Data Dragon cache
 data_dragon_cache/
+
+
+./venv

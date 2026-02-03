@@ -39,11 +39,31 @@ class RiotEndpoints:
 
     # ==================== LEAGUE-V4 ====================
 
-    async def get_league_entries(self, summoner_id: str) -> Optional[List[Dict[str, Any]]]:
+    async def get_league_entries_by_puuid(self, puuid: str) -> Optional[List[Dict[str, Any]]]:
         """
-        Récupère les rangs du joueur (Solo/Duo et Flex)
+        Récupère les rangs du joueur (Solo/Duo et Flex) via PUUID
 
         Returns: List of {'queueType': str, 'tier': str, 'rank': str, 'leaguePoints': int, 'wins': int, 'losses': int}
+        """
+        url = f"{self.platform_base}/lol/league/v4/entries/by-puuid/{puuid}"
+        cache_key = f"league:puuid:{puuid}"
+
+        # Faire la requête
+        result = await self.client.request(url, cache_key, CACHE_TTL['RANK'])
+
+        # Si le résultat est vide, supprimer du cache pour permettre un refresh
+        # (évite de cacher un résultat "non classé" pendant 30 min)
+        if result is not None and len(result) == 0:
+            print(f"[API] Rang vide pour {puuid}, pas de mise en cache")
+            if self.client.db_manager:
+                await self.client.db_manager.clear_cache_by_pattern(cache_key)
+
+        return result
+
+    async def get_league_entries(self, summoner_id: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        DEPRECATED: Utiliser get_league_entries_by_puuid à la place
+        Récupère les rangs du joueur via summoner_id (ancien endpoint)
         """
         url = f"{self.platform_base}/lol/league/v4/entries/by-summoner/{summoner_id}"
         cache_key = f"league:summoner:{summoner_id}"
