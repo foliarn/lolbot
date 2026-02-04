@@ -1,3 +1,5 @@
+#(THIS DISCORD BOT IS 100% VIBE CODED BY CLAUDE CODE (OPUS 4.5) -- IM TRYING OUT TO SEE THE EXTENT OF VIBE CODING ON A SIMPLE PROJECT))
+
 # LoL Bot - Patch Watcher & Clash Scout
 
 Bot Discord Python pour League of Legends avec surveillance de patchs et analyse d'équipes Clash.
