@@ -64,6 +64,7 @@ class LoLBot(commands.Bot):
         print("[Setup] Chargement des cogs...")
         await self.load_extension('cogs.account_cog')
         await self.load_extension('cogs.utility_cog')
+        await self.load_extension('cogs.clash_cog')
 
         print("[Setup] Synchronisation des commandes slash...")
         # Sync global

@@ -135,9 +135,11 @@ class LeaderboardModule:
         """Recupere les donnees du leaderboard pour une queue"""
         puuids = await self.db.get_all_registered_puuids()
         now = datetime.now(PARIS_TZ)
-        yesterday = now - timedelta(days=1)
 
-        # Lundi de cette semaine
+        # Il y a exactement 24 heures
+        time_24h_ago = now - timedelta(hours=24)
+
+        # Lundi de cette semaine a minuit
         days_since_monday = now.weekday()
         monday = now - timedelta(days=days_since_monday)
         monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -168,15 +170,15 @@ class LeaderboardModule:
                     current_rank.get('leaguePoints', 0)
                 )
 
-                # Rang d'hier
-                rank_yesterday = await self.db.get_rank_at_time(
-                    puuid, queue_type, yesterday.isoformat()
+                # Rang il y a 24h
+                rank_24h_ago = await self.db.get_rank_at_time(
+                    puuid, queue_type, time_24h_ago.isoformat()
                 )
-                lp_yesterday = rank_to_lp(
-                    rank_yesterday.get('tier', '') if rank_yesterday else '',
-                    rank_yesterday.get('rank', '') if rank_yesterday else '',
-                    rank_yesterday.get('league_points', 0) if rank_yesterday else 0
-                ) if rank_yesterday else current_lp
+                lp_24h_ago = rank_to_lp(
+                    rank_24h_ago.get('tier', '') if rank_24h_ago else '',
+                    rank_24h_ago.get('rank', '') if rank_24h_ago else '',
+                    rank_24h_ago.get('league_points', 0) if rank_24h_ago else 0
+                ) if rank_24h_ago else current_lp
 
                 # Rang du lundi
                 rank_monday = await self.db.get_rank_at_time(
@@ -189,11 +191,11 @@ class LeaderboardModule:
                 ) if rank_monday else current_lp
 
                 # Calculer les changements
-                lp_change_24h = current_lp - lp_yesterday
+                lp_change_24h = current_lp - lp_24h_ago
                 lp_change_week = current_lp - lp_monday
 
-                # Detecter promotion/demotion (changement de tier)
-                prev_tier = rank_yesterday.get('tier', '') if rank_yesterday else current_rank.get('tier', '')
+                # Detecter promotion/demotion (changement de tier sur 24h)
+                prev_tier = rank_24h_ago.get('tier', '') if rank_24h_ago else current_rank.get('tier', '')
                 curr_tier = current_rank.get('tier', '')
                 prev_tier_value = TIER_ORDER.get(prev_tier.upper(), 0) if prev_tier else 0
                 curr_tier_value = TIER_ORDER.get(curr_tier.upper(), 0) if curr_tier else 0
@@ -266,22 +268,22 @@ class LeaderboardModule:
 
         # Header
         table_lines = []
-        table_lines.append(f"{'#':<3} {'Joueur':<{max_name_len}} {'Rang':<10} {'WR':>4} {'24h':>6} {'Sem.':>6}")
-        table_lines.append("─" * (3 + 1 + max_name_len + 1 + 10 + 1 + 4 + 1 + 6 + 1 + 6))
+        table_lines.append(f"{'#':<3} {'Joueur':<{max_name_len}} {'Rang':<10} {'W/L':>10} {'24h':>6} {'Sem.':>6}")
+        table_lines.append("─" * (3 + 1 + max_name_len + 1 + 10 + 1 + 10 + 1 + 6 + 1 + 6))
 
         for i, p in enumerate(players, 1):
             rank_str = format_rank_short(p['tier'], p['rank'], p['lp'])
             lp_24h = format_lp_change_ansi(p['lp_change_24h'])
             lp_week = format_lp_change_ansi(p['lp_change_week'])
 
-            # Calculate winrate
+            # Calculate winrate and W/L string
             total_games = p['wins'] + p['losses']
             winrate = int((p['wins'] / total_games) * 100) if total_games > 0 else 0
-            wr_str = f"{winrate}%"
+            wl_wr_str = f"{p['wins']}W/{p['losses']}L {winrate}%"
 
             name = p['display_name']
 
-            line = f"{i:<3} {name:<{max_name_len}} {rank_str:<10} {wr_str:>4} {lp_24h} {lp_week}"
+            line = f"{i:<3} {name:<{max_name_len}} {rank_str:<10} {wl_wr_str:>10} {lp_24h} {lp_week}"
             table_lines.append(line)
 
             # Messages speciaux
@@ -343,32 +345,31 @@ class LeaderboardModule:
         max_name_len = max(max_name_len, 6)  # minimum "Joueur"
         name_col = max_name_len + 2
 
-        total_width = 4 + name_col + 12 + 6 + 10 + 10 + 8
+        total_width = 4 + name_col + 12 + 14 + 10 + 10
 
         lines = [
             "",
             "┌" + "─" * total_width + "┐",
             "│" + f" {title}".ljust(total_width) + "│",
-            "├" + "─" * 4 + "┬" + "─" * name_col + "┬" + "─" * 12 + "┬" + "─" * 6 + "┬" + "─" * 10 + "┬" + "─" * 10 + "┬" + "─" * 8 + "┤",
-            "│" + " # ".ljust(4) + "│" + " Joueur".ljust(name_col) + "│" + " Rang".ljust(12) + "│" + " WR".ljust(6) + "│" + " 24h".ljust(10) + "│" + " Semaine".ljust(10) + "│" + " W/L".ljust(8) + "│",
-            "├" + "─" * 4 + "┼" + "─" * name_col + "┼" + "─" * 12 + "┼" + "─" * 6 + "┼" + "─" * 10 + "┼" + "─" * 10 + "┼" + "─" * 8 + "┤",
+            "├" + "─" * 4 + "┬" + "─" * name_col + "┬" + "─" * 12 + "┬" + "─" * 14 + "┬" + "─" * 10 + "┬" + "─" * 10 + "┤",
+            "│" + " # ".ljust(4) + "│" + " Joueur".ljust(name_col) + "│" + " Rang".ljust(12) + "│" + " W/L".ljust(14) + "│" + " 24h".ljust(10) + "│" + " Semaine".ljust(10) + "│",
+            "├" + "─" * 4 + "┼" + "─" * name_col + "┼" + "─" * 12 + "┼" + "─" * 14 + "┼" + "─" * 10 + "┼" + "─" * 10 + "┤",
         ]
 
         for i, p in enumerate(players, 1):
             rank_str = format_rank_short(p['tier'], p['rank'], p['lp'])
             lp_24h = format_lp_change_plain(p['lp_change_24h'])
             lp_week = format_lp_change_plain(p['lp_change_week'])
-            wl = f"{p['wins']}/{p['losses']}"
             name = p['display_name']
 
-            # Calculate winrate
+            # Calculate winrate and W/L string
             total_games = p['wins'] + p['losses']
             winrate = int((p['wins'] / total_games) * 100) if total_games > 0 else 0
-            wr_str = f"{winrate}%"
+            wl_wr_str = f"{p['wins']}W/{p['losses']}L {winrate}%"
 
-            line = f"│ {i:<2} │ {name:<{max_name_len}} │ {rank_str:<10} │ {wr_str:>4} │ {lp_24h:>8} │ {lp_week:>8} │ {wl:>6} │"
+            line = f"│ {i:<2} │ {name:<{max_name_len}} │ {rank_str:<10} │ {wl_wr_str:>12} │ {lp_24h:>8} │ {lp_week:>8} │"
             lines.append(line)
 
-        lines.append("└" + "─" * 4 + "┴" + "─" * name_col + "┴" + "─" * 12 + "┴" + "─" * 6 + "┴" + "─" * 10 + "┴" + "─" * 10 + "┴" + "─" * 8 + "┘")
+        lines.append("└" + "─" * 4 + "┴" + "─" * name_col + "┴" + "─" * 12 + "┴" + "─" * 14 + "┴" + "─" * 10 + "┴" + "─" * 10 + "┘")
 
         return "\n".join(lines)

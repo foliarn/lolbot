@@ -259,3 +259,171 @@ class DatabaseManager:
             )
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+    # ==================== Clash Teams ====================
+
+    async def create_clash_team(
+        self,
+        team_name: str,
+        creator_discord_id: str,
+        member_discord_ids: List[str]
+    ) -> Optional[int]:
+        """Cree une equipe Clash avec ses membres. Retourne l'ID de l'equipe."""
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                # Creer l'equipe
+                cursor = await db.execute(
+                    """INSERT INTO clash_teams (team_name, created_by_discord_id)
+                    VALUES (?, ?)""",
+                    (team_name, creator_discord_id)
+                )
+                team_id = cursor.lastrowid
+
+                # Ajouter les membres
+                for position, discord_id in enumerate(member_discord_ids):
+                    await db.execute(
+                        """INSERT INTO clash_team_members (team_id, discord_id, position)
+                        VALUES (?, ?, ?)""",
+                        (team_id, discord_id, position)
+                    )
+
+                await db.commit()
+                return team_id
+            except aiosqlite.IntegrityError:
+                return None
+
+    async def get_clash_team(
+        self,
+        team_name: str,
+        creator_discord_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Recupere une equipe Clash par son nom et createur"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """SELECT * FROM clash_teams
+                WHERE team_name = ? AND created_by_discord_id = ?""",
+                (team_name, creator_discord_id)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+
+            team = dict(row)
+
+            # Recuperer les membres
+            cursor = await db.execute(
+                """SELECT ctm.discord_id, ctm.position, u.game_name, u.tag_line, u.riot_puuid
+                FROM clash_team_members ctm
+                LEFT JOIN users u ON ctm.discord_id = u.discord_id AND u.is_primary = 1
+                WHERE ctm.team_id = ?
+                ORDER BY ctm.position""",
+                (team['id'],)
+            )
+            members = await cursor.fetchall()
+            team['members'] = [dict(m) for m in members]
+
+            return team
+
+    async def get_clash_team_by_id(self, team_id: int) -> Optional[Dict[str, Any]]:
+        """Recupere une equipe Clash par son ID"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM clash_teams WHERE id = ?",
+                (team_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+
+            team = dict(row)
+
+            # Recuperer les membres
+            cursor = await db.execute(
+                """SELECT ctm.discord_id, ctm.position, u.game_name, u.tag_line, u.riot_puuid
+                FROM clash_team_members ctm
+                LEFT JOIN users u ON ctm.discord_id = u.discord_id AND u.is_primary = 1
+                WHERE ctm.team_id = ?
+                ORDER BY ctm.position""",
+                (team_id,)
+            )
+            members = await cursor.fetchall()
+            team['members'] = [dict(m) for m in members]
+
+            return team
+
+    async def get_user_clash_teams(self, discord_id: str) -> List[Dict[str, Any]]:
+        """Recupere toutes les equipes dont l'utilisateur fait partie"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            # Equipes creees par l'utilisateur
+            cursor = await db.execute(
+                """SELECT ct.*, 'creator' as role
+                FROM clash_teams ct
+                WHERE ct.created_by_discord_id = ?
+                ORDER BY ct.created_at DESC""",
+                (discord_id,)
+            )
+            created_teams = await cursor.fetchall()
+
+            # Equipes ou l'utilisateur est membre
+            cursor = await db.execute(
+                """SELECT ct.*, 'member' as role
+                FROM clash_teams ct
+                JOIN clash_team_members ctm ON ct.id = ctm.team_id
+                WHERE ctm.discord_id = ? AND ct.created_by_discord_id != ?
+                ORDER BY ct.created_at DESC""",
+                (discord_id, discord_id)
+            )
+            member_teams = await cursor.fetchall()
+
+            all_teams = []
+            for row in list(created_teams) + list(member_teams):
+                team = dict(row)
+                # Recuperer les membres
+                cursor = await db.execute(
+                    """SELECT ctm.discord_id, ctm.position, u.game_name, u.tag_line
+                    FROM clash_team_members ctm
+                    LEFT JOIN users u ON ctm.discord_id = u.discord_id AND u.is_primary = 1
+                    WHERE ctm.team_id = ?
+                    ORDER BY ctm.position""",
+                    (team['id'],)
+                )
+                members = await cursor.fetchall()
+                team['members'] = [dict(m) for m in members]
+                all_teams.append(team)
+
+            return all_teams
+
+    async def delete_clash_team(self, team_id: int) -> bool:
+        """Supprime une equipe Clash"""
+        async with aiosqlite.connect(self.db_path) as db:
+            # Supprimer d'abord les membres (meme si CASCADE devrait le faire)
+            await db.execute(
+                "DELETE FROM clash_team_members WHERE team_id = ?",
+                (team_id,)
+            )
+            # Supprimer l'equipe
+            cursor = await db.execute(
+                "DELETE FROM clash_teams WHERE id = ?",
+                (team_id,)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_clash_team_members_data(self, team_id: int) -> List[Dict[str, Any]]:
+        """Recupere les donnees des membres d'une equipe (puuid, game_name, etc.)"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """SELECT u.riot_puuid, u.summoner_id, u.game_name, u.tag_line, u.region,
+                          ctm.position
+                FROM clash_team_members ctm
+                JOIN users u ON ctm.discord_id = u.discord_id AND u.is_primary = 1
+                WHERE ctm.team_id = ?
+                ORDER BY ctm.position""",
+                (team_id,)
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]

@@ -40,6 +40,25 @@ CREATE TABLE IF NOT EXISTS rank_history (
     recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Clash teams created by users
+CREATE TABLE IF NOT EXISTS clash_teams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_name TEXT NOT NULL,
+    created_by_discord_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(team_name, created_by_discord_id)
+);
+
+-- Team members (links to users table via discord_id)
+CREATE TABLE IF NOT EXISTS clash_team_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id INTEGER NOT NULL,
+    discord_id TEXT NOT NULL,
+    position INTEGER DEFAULT 0,
+    FOREIGN KEY (team_id) REFERENCES clash_teams(id) ON DELETE CASCADE,
+    UNIQUE(team_id, discord_id)
+);
+
 -- Index pour améliorer les performances
 CREATE INDEX IF NOT EXISTS idx_users_discord_id ON users(discord_id);
 CREATE INDEX IF NOT EXISTS idx_users_primary ON users(discord_id, is_primary);
@@ -48,4 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_cache_expires ON api_cache(expires_at);
 CREATE INDEX IF NOT EXISTS idx_rank_history_puuid ON rank_history(riot_puuid);
 CREATE INDEX IF NOT EXISTS idx_rank_history_date ON rank_history(recorded_at);
 CREATE INDEX IF NOT EXISTS idx_rank_history_queue ON rank_history(queue_type);
+CREATE INDEX IF NOT EXISTS idx_clash_teams_creator ON clash_teams(created_by_discord_id);
+CREATE INDEX IF NOT EXISTS idx_clash_team_members_team ON clash_team_members(team_id);
+CREATE INDEX IF NOT EXISTS idx_clash_team_members_discord ON clash_team_members(discord_id);
 """
