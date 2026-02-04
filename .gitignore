@@ -46,4 +46,4 @@ wheels/
 data_dragon_cache/
 
 
-./venv
+venv/
