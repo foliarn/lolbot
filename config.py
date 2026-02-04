@@ -5,7 +5,8 @@ Toutes les valeurs sont éditables pour ajuster le comportement du bot
 
 # Cache TTL (secondes)
 CACHE_TTL = {
-    'MATCH_HISTORY': 300,      # 5 min
+    'MATCH_HISTORY': 300,      # 5 min (liste des match IDs)
+    'MATCH_DETAIL': None,      # Permanent (résultat d'un match, immuable)
     'LIVE_GAME': 60,           # 1 min
     'MASTERY': 3600,           # 1h
     'RANK': 1800,              # 30 min
@@ -43,7 +44,7 @@ DANGER_SCORE = {
     'OTP_SEASON_PERCENTAGE': 50,            # % des games cette saison sur ce champion
     'OTP_SCORE': 50,                        # Points bonus OTP
 
-    'RECENT_GAMES_COUNT': 10,               # Nombre de games recentes a analyser
+    'RECENT_GAMES_COUNT': 20,               # Nombre de games recentes a analyser
     'RECENT_SPAM_THRESHOLD': 5,             # Games jouees recemment sur ce champion
     'RECENT_SPAM_SCORE': 30,                # Points bonus spam recent
 
@@ -51,8 +52,8 @@ DANGER_SCORE = {
     'WINRATE_SCORE_PER_PERCENT': 5,         # Points par % au-dessus de 50
 
     'SMURF_MASTERY_MAX': 50000,             # Mastery faible = possible smurf
-    'SMURF_WR_THRESHOLD': 65,               # Winrate eleve (smurf)
-    'SMURF_KDA_THRESHOLD': 3.5,             # KDA eleve (smurf)
+    'SMURF_WR_THRESHOLD': 60,               # Winrate eleve (smurf)
+    'SMURF_KDA_THRESHOLD': 3,               # KDA eleve (smurf)
     'SMURF_SCORE': 80,                      # Points bonus smurf detecte
 }
 

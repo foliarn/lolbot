@@ -25,6 +25,16 @@ class RiotEndpoints:
         cache_key = f"account:riotid:{game_name}#{tag_line}"
         return await self.client.request(url, cache_key, CACHE_TTL['REGISTERED_USER'])
 
+    async def get_account_by_puuid(self, puuid: str) -> Optional[Dict[str, Any]]:
+        """
+        Récupère le gameName et tagLine à partir du PUUID
+
+        Returns: {'puuid': str, 'gameName': str, 'tagLine': str}
+        """
+        url = f"{self.regional_base}/riot/account/v1/accounts/by-puuid/{puuid}"
+        cache_key = f"account:puuid:{puuid}"
+        return await self.client.request(url, cache_key, CACHE_TTL['REGISTERED_USER'])
+
     # ==================== SUMMONER-V4 ====================
 
     async def get_summoner_by_puuid(self, puuid: str) -> Optional[Dict[str, Any]]:
@@ -126,7 +136,7 @@ class RiotEndpoints:
         """
         url = f"{self.regional_base}/lol/match/v5/matches/{match_id}"
         cache_key = f"match:{match_id}"
-        return await self.client.request(url, cache_key, CACHE_TTL['MATCH_HISTORY'])
+        return await self.client.request(url, cache_key, CACHE_TTL['MATCH_DETAIL'])
 
     # ==================== SPECTATOR-V4 ====================
 
@@ -141,13 +151,13 @@ class RiotEndpoints:
 
     # ==================== CLASH-V1 ====================
 
-    async def get_clash_player(self, summoner_id: str) -> Optional[List[Dict[str, Any]]]:
+    async def get_clash_player_by_puuid(self, puuid: str) -> Optional[List[Dict[str, Any]]]:
         """
-        Récupère les équipes Clash du joueur
+        Récupère les équipes Clash du joueur via PUUID
 
         Returns: List of {'teamId': str, 'position': str, 'role': str}
         """
-        url = f"{self.platform_base}/lol/clash/v1/players/by-summoner/{summoner_id}"
+        url = f"{self.platform_base}/lol/clash/v1/players/by-puuid/{puuid}"
         return await self.client.request(url, use_rate_limit=True)
 
     async def get_clash_team(self, team_id: str) -> Optional[Dict[str, Any]]:

@@ -7,6 +7,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from collections import defaultdict
 
 import config
+from utils.scraper import scrape_champion_season_stats
 
 
 @dataclass
@@ -21,6 +22,8 @@ class ChampionData:
     total_kills: int = 0
     total_deaths: int = 0
     total_assists: int = 0
+    season_games: int = 0
+    season_winrate: float = 0.0
 
     @property
     def winrate(self) -> float:
@@ -79,12 +82,14 @@ class PlayerData:
     game_name: str
     tag_line: str
     rank: RankInfo = field(default_factory=RankInfo)
+    flex_rank: RankInfo = field(default_factory=RankInfo)
     recent_winrate: float = 0.0
     recent_kda: float = 0.0
     main_role: str = "UNKNOWN"
     role_distribution: Dict[str, float] = field(default_factory=dict)
     top_champions: List[ChampionData] = field(default_factory=list)
     threat_score: float = 0.0
+    total_season_games: int = 0
     is_private: bool = False
     error: Optional[str] = None
 
@@ -115,22 +120,16 @@ class ClashScoutModule:
         """
         result = ScoutResult()
 
-        # 1. Recuperer le PUUID et summoner ID du joueur
+        # 1. Recuperer le PUUID du joueur
         account = await self.api.get_account_by_riot_id(riot_id, tag)
         if not account:
             result.team_composition = "error"
             return result
 
         puuid = account['puuid']
-        summoner = await self.api.get_summoner_by_puuid(puuid)
-        if not summoner:
-            result.team_composition = "error"
-            return result
-
-        summoner_id = summoner.get('id')
 
         # 2. Trouver l'equipe Clash
-        clash_data = await self.api.get_clash_player(summoner_id)
+        clash_data = await self.api.get_clash_player_by_puuid(puuid)
         if not clash_data or len(clash_data) == 0:
             result.team_composition = "no_clash"
             return result
@@ -152,8 +151,11 @@ class ClashScoutModule:
         # 4. Scout chaque joueur en parallele
         tasks = []
         for player in players:
-            player_summoner_id = player.get('summonerId')
-            tasks.append(self._fetch_player_data_by_summoner_id(player_summoner_id))
+            player_puuid = player.get('puuid')
+            if player_puuid:
+                tasks.append(self.fetch_player_data(player_puuid))
+            else:
+                tasks.append(self._fetch_player_data_by_summoner_id(player.get('summonerId')))
 
         player_results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -233,61 +235,143 @@ class ClashScoutModule:
     async def fetch_player_data(self, puuid: str) -> Optional[PlayerData]:
         """Recupere toutes les donnees d'un joueur"""
         try:
-            # Recuperer les infos de base
-            summoner = await self.api.get_summoner_by_puuid(puuid)
-            if not summoner:
-                return None
-
-            # Creer l'objet PlayerData
-            # On doit recuperer le game_name via account API
-            # Note: summoner n'a plus le 'name' field
-            player = PlayerData(
-                puuid=puuid,
-                game_name=summoner.get('name', 'Unknown'),
-                tag_line='EUW'
-            )
-
-            # Essayer de recuperer le vrai nom via account API
-            # (on a besoin du game_name#tag_line)
-            # Pour l'instant on garde le name du summoner
-
-            # Fetch en parallele: rank, mastery, match history
-            rank_task = self.api.get_league_entries_by_puuid(puuid)
-            mastery_task = self.api.get_champion_masteries(puuid, count=10)
-            history_task = self.api.get_match_history(puuid, count=20)
-
-            ranks, masteries, match_ids = await asyncio.gather(
-                rank_task, mastery_task, history_task,
+            # Fetch en parallele: account (nom), rank, mastery, match history
+            account, ranks, masteries, match_ids = await asyncio.gather(
+                self.api.get_account_by_puuid(puuid),
+                self.api.get_league_entries_by_puuid(puuid),
+                self.api.get_champion_masteries(puuid, count=10),
+                self.api.get_match_history(puuid, count=config.DANGER_SCORE['RECENT_GAMES_COUNT']),
                 return_exceptions=True
             )
+
+            if isinstance(account, dict):
+                game_name = account.get('gameName', 'Unknown')
+                tag_line = account.get('tagLine', '???')
+            else:
+                game_name = 'Unknown'
+                tag_line = '???'
+
+            player = PlayerData(puuid=puuid, game_name=game_name, tag_line=tag_line)
 
             # Traiter les rangs
             if isinstance(ranks, list) and ranks:
                 for rank_data in ranks:
-                    if rank_data.get('queueType') == 'RANKED_SOLO_5x5':
-                        player.rank = RankInfo(
-                            tier=rank_data.get('tier', ''),
-                            rank=rank_data.get('rank', ''),
-                            lp=rank_data.get('leaguePoints', 0),
-                            wins=rank_data.get('wins', 0),
-                            losses=rank_data.get('losses', 0)
-                        )
-                        break
+                    queue = rank_data.get('queueType')
+                    if queue not in ('RANKED_SOLO_5x5', 'RANKED_FLEX_SR'):
+                        continue
+                    rank_info = RankInfo(
+                        tier=rank_data.get('tier', ''),
+                        rank=rank_data.get('rank', ''),
+                        lp=rank_data.get('leaguePoints', 0),
+                        wins=rank_data.get('wins', 0),
+                        losses=rank_data.get('losses', 0)
+                    )
+                    if queue == 'RANKED_SOLO_5x5':
+                        player.rank = rank_info
+                    else:
+                        player.flex_rank = rank_info
 
-            # Traiter les masteries
-            champion_names = self.data_dragon.get_champion_names()
+            # Lookups pour construction du champion list
+            # Charge les donnees Data Dragon si pas encore fait
+            await self.data_dragon.get_champion_id_to_name_map()
+            name_to_id = {}   # scraper name → champion_id (internal + display)
+            id_to_name = {}   # champion_id → display name
+            if self.data_dragon.champions:
+                for internal_name, data in self.data_dragon.champions['data'].items():
+                    champ_id = int(data['key'])
+                    display_name = data.get('name', internal_name)
+                    name_to_id[internal_name] = champ_id
+                    name_to_id[display_name] = champ_id
+                    id_to_name[champ_id] = display_name
+
+            mastery_by_id = {}  # champion_id → mastery points
             if isinstance(masteries, list):
                 for m in masteries:
+                    mastery_by_id[m.get('championId')] = m.get('championPoints', 0)
+
+            # Scrape season stats + analyse match history en parallele
+            region = config.DEFAULT_REGION.lower().rstrip('0123456789')
+            match_ids_to_use = match_ids[:config.DANGER_SCORE['RECENT_GAMES_COUNT']] if isinstance(match_ids, list) and match_ids else []
+            season_stats, match_champ_stats = await asyncio.gather(
+                asyncio.to_thread(scrape_champion_season_stats, game_name, tag_line, region),
+                self._analyze_match_history(player, match_ids_to_use)
+            )
+            match_champ_stats = match_champ_stats or {}
+
+            # Total games saison pour le calcul OTP %
+            player.total_season_games = sum(s['games'] for s in season_stats.values()) if season_stats else 0
+
+            # --- Construction du champion list ---
+            if season_stats:
+                # Primaire: top 10 champions par games jouees cette saison
+                sorted_season = sorted(season_stats.items(), key=lambda x: x[1]['games'], reverse=True)[:10]
+                seen_ids = set()
+
+                for champ_name, s_stats in sorted_season:
+                    champ_id = name_to_id.get(champ_name, 0)
+                    seen_ids.add(champ_id)
+                    m_stats = match_champ_stats.get(champ_id, {})
+
+                    player.top_champions.append(ChampionData(
+                        champion_id=champ_id,
+                        champion_name=champ_name,
+                        mastery_points=mastery_by_id.get(champ_id, 0),
+                        season_games=s_stats['games'],
+                        season_winrate=s_stats['winrate'],
+                        games_played=m_stats.get('games', 0),
+                        wins=m_stats.get('wins', 0),
+                        losses=m_stats.get('games', 0) - m_stats.get('wins', 0),
+                        total_kills=m_stats.get('kills', 0),
+                        total_deaths=m_stats.get('deaths', 0),
+                        total_assists=m_stats.get('assists', 0),
+                    ))
+
+                # Champions du match history absents du top 10 saison
+                for champ_id, m_stats in match_champ_stats.items():
+                    if champ_id not in seen_ids:
+                        player.top_champions.append(ChampionData(
+                            champion_id=champ_id,
+                            champion_name=id_to_name.get(champ_id, f"Champion {champ_id}"),
+                            mastery_points=mastery_by_id.get(champ_id, 0),
+                            games_played=m_stats.get('games', 0),
+                            wins=m_stats.get('wins', 0),
+                            losses=m_stats.get('games', 0) - m_stats.get('wins', 0),
+                            total_kills=m_stats.get('kills', 0),
+                            total_deaths=m_stats.get('deaths', 0),
+                            total_assists=m_stats.get('assists', 0),
+                        ))
+            else:
+                # Fallback: mastery top 10 comme base
+                for m in (masteries if isinstance(masteries, list) else []):
                     champ_id = m.get('championId')
                     player.top_champions.append(ChampionData(
                         champion_id=champ_id,
-                        champion_name=champion_names.get(champ_id, f"Champion {champ_id}"),
+                        champion_name=id_to_name.get(champ_id, f"Champion {champ_id}"),
                         mastery_points=m.get('championPoints', 0)
                     ))
 
-            # Traiter l'historique des matchs
-            if isinstance(match_ids, list) and match_ids:
-                await self._analyze_match_history(player, match_ids[:20])
+                # Augmenter avec les stats du match history
+                for champ_id, m_stats in match_champ_stats.items():
+                    existing = next((c for c in player.top_champions if c.champion_id == champ_id), None)
+                    if existing:
+                        existing.games_played = m_stats.get('games', 0)
+                        existing.wins = m_stats.get('wins', 0)
+                        existing.losses = m_stats.get('games', 0) - m_stats.get('wins', 0)
+                        existing.total_kills = m_stats.get('kills', 0)
+                        existing.total_deaths = m_stats.get('deaths', 0)
+                        existing.total_assists = m_stats.get('assists', 0)
+                    else:
+                        player.top_champions.append(ChampionData(
+                            champion_id=champ_id,
+                            champion_name=id_to_name.get(champ_id, f"Champion {champ_id}"),
+                            mastery_points=0,
+                            games_played=m_stats.get('games', 0),
+                            wins=m_stats.get('wins', 0),
+                            losses=m_stats.get('games', 0) - m_stats.get('wins', 0),
+                            total_kills=m_stats.get('kills', 0),
+                            total_deaths=m_stats.get('deaths', 0),
+                            total_assists=m_stats.get('assists', 0),
+                        ))
 
             # Calculer le threat score
             player.threat_score = self.calculate_player_threat(player)
@@ -300,10 +384,10 @@ class ClashScoutModule:
             traceback.print_exc()
             return None
 
-    async def _analyze_match_history(self, player: PlayerData, match_ids: List[str]):
-        """Analyse l'historique de matchs d'un joueur"""
+    async def _analyze_match_history(self, player: PlayerData, match_ids: List[str]) -> Dict[int, Dict]:
+        """Analyse l'historique de matchs. Retourne {champion_id: {games, wins, kills, deaths, assists}}."""
         if not match_ids:
-            return
+            return {}
 
         # Fetch les details des matchs (en parallele par batch pour eviter rate limit)
         batch_size = 5
@@ -318,7 +402,7 @@ class ClashScoutModule:
                     matches.append(r)
 
         if not matches:
-            return
+            return {}
 
         # Analyser les matchs
         role_counts = defaultdict(int)
@@ -386,32 +470,7 @@ class ClashScoutModule:
             }
             player.main_role = max(role_counts, key=role_counts.get)
 
-        # Mettre a jour les stats des champions
-        champion_names = self.data_dragon.get_champion_names()
-        for champ in player.top_champions:
-            if champ.champion_id in champion_stats:
-                stats = champion_stats[champ.champion_id]
-                champ.games_played = stats['games']
-                champ.wins = stats['wins']
-                champ.losses = stats['games'] - stats['wins']
-                champ.total_kills = stats['kills']
-                champ.total_deaths = stats['deaths']
-                champ.total_assists = stats['assists']
-
-        # Ajouter les champions joues mais pas dans top mastery
-        for champ_id, stats in champion_stats.items():
-            if not any(c.champion_id == champ_id for c in player.top_champions):
-                player.top_champions.append(ChampionData(
-                    champion_id=champ_id,
-                    champion_name=champion_names.get(champ_id, f"Champion {champ_id}"),
-                    mastery_points=0,
-                    games_played=stats['games'],
-                    wins=stats['wins'],
-                    losses=stats['games'] - stats['wins'],
-                    total_kills=stats['kills'],
-                    total_deaths=stats['deaths'],
-                    total_assists=stats['assists']
-                ))
+        return champion_stats
 
     def detect_role(self, matches: List[Dict[str, Any]], puuid: str) -> Dict[str, float]:
         """Detecte la distribution des roles d'un joueur"""
@@ -442,34 +501,48 @@ class ClashScoutModule:
         score = 0
         reasons = []
 
-        # OTP check
-        is_otp = False
+        # OTP check — mastery OU pourcentage de games saison
         if champion.mastery_points >= cfg['OTP_MASTERY_THRESHOLD']:
-            is_otp = True
             score += cfg['OTP_SCORE']
             reasons.append(f"OTP ({champion.mastery_points:,} pts)")
+        elif (player.total_season_games > 0 and
+              champion.season_games / player.total_season_games * 100 >= cfg['OTP_SEASON_PERCENTAGE']):
+            score += cfg['OTP_SCORE']
+            reasons.append(f"OTP ({champion.season_games}/{player.total_season_games}g saison)")
 
-        # Recent spam check
+        # Spam recent (basé sur match history des dernières N games)
         if champion.games_played >= cfg['RECENT_SPAM_THRESHOLD']:
             score += cfg['RECENT_SPAM_SCORE']
-            reasons.append(f"Spam recent ({champion.games_played} games)")
+            reasons.append(f"Spam recent ({champion.games_played}g)")
 
-        # Winrate bonus
-        if champion.games_played >= 3:  # Minimum games for meaningful winrate
-            wr_diff = champion.winrate - cfg['WINRATE_NEUTRAL']
+        # Winrate — préfère season si données suffisantes (>= 10 games)
+        if champion.season_games >= 10:
+            effective_wr = champion.season_winrate
+        elif champion.games_played >= 3:
+            effective_wr = champion.winrate
+        else:
+            effective_wr = 0.0
+
+        if effective_wr > 0:
+            wr_diff = effective_wr - cfg['WINRATE_NEUTRAL']
             if wr_diff > 0:
                 wr_score = int(wr_diff * cfg['WINRATE_SCORE_PER_PERCENT'])
                 score += wr_score
                 if wr_score > 0:
-                    reasons.append(f"{champion.winrate:.0f}% WR")
+                    source = "saison" if champion.season_games >= 10 else "recent"
+                    reasons.append(f"{effective_wr:.0f}% WR ({source})")
 
-        # Smurf detection
+        # Smurf detection — nécessite KDA (données match history uniquement)
         if (champion.mastery_points < cfg['SMURF_MASTERY_MAX'] and
             champion.games_played >= 3 and
             champion.winrate >= cfg['SMURF_WR_THRESHOLD'] and
             champion.kda >= cfg['SMURF_KDA_THRESHOLD']):
             score += cfg['SMURF_SCORE']
             reasons.append("Smurf suspecte")
+
+        # Display: préfère season quand disponible
+        display_games = champion.season_games if champion.season_games > 0 else champion.games_played
+        display_wr = effective_wr if effective_wr > 0 else champion.winrate
 
         return DangerScore(
             champion_id=champion.champion_id,
@@ -478,8 +551,8 @@ class ClashScoutModule:
             reasons=reasons,
             player_name=f"{player.game_name}",
             mastery_points=champion.mastery_points,
-            games_played=champion.games_played,
-            winrate=champion.winrate
+            games_played=display_games,
+            winrate=display_wr
         )
 
     def calculate_player_threat(self, player: PlayerData) -> float:
@@ -509,7 +582,7 @@ class ClashScoutModule:
         for player in players:
             for champion in player.top_champions:
                 # Ne considerer que les champions joues recemment ou avec haute mastery
-                if champion.games_played > 0 or champion.mastery_points > 50000:
+                if champion.games_played > 0 or champion.season_games > 0 or champion.mastery_points > 50000:
                     danger = self.calculate_danger_score(champion, player)
                     if danger.total_score > 0:
                         all_dangers.append(danger)

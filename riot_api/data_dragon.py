@@ -99,6 +99,15 @@ class DataDragon:
             return list(self.champions['data'].keys())
         return []
 
+    async def get_champion_id_to_name_map(self) -> Dict[int, str]:
+        """Retourne un dictionnaire {champion_id: champion_name}"""
+        if not self.champions:
+            await self.load_champions()
+
+        if self.champions:
+            return {int(data['key']): name for name, data in self.champions['data'].items()}
+        return {}
+
     async def compare_versions(self, old_version: str, new_version: str) -> Dict[str, Dict[str, Any]]:
         """
         Compare deux versions de champion.json et retourne les différences

@@ -140,16 +140,19 @@ def create_clash_players_embed(players: List['PlayerData']) -> discord.Embed:
         role_name = ROLE_NAMES.get(player.main_role, '?')
         rank_str = format_rank_display(player.rank)
 
-        # Top 3 champions
+        # Top 3 champions — priorise season_games si disponible
         top_champs = sorted(
-            [c for c in player.top_champions if c.games_played > 0],
-            key=lambda c: c.games_played,
+            [c for c in player.top_champions if c.season_games > 0 or c.games_played > 0],
+            key=lambda c: c.season_games if c.season_games > 0 else c.games_played,
             reverse=True
         )[:3]
 
         champ_text = ""
         for c in top_champs:
-            champ_text += f"`{c.champion_name}` ({c.games_played}g, {c.winrate:.0f}%)\n"
+            if c.season_games > 0:
+                champ_text += f"`{c.champion_name}` ({c.season_games}g, {c.season_winrate:.0f}% WR)\n"
+            else:
+                champ_text += f"`{c.champion_name}` ({c.games_played}g, {c.winrate:.0f}%)\n"
 
         if not champ_text:
             # Fallback to mastery champions
@@ -171,10 +174,18 @@ def create_clash_players_embed(players: List['PlayerData']) -> discord.Embed:
         if not champ_text:
             champ_text = "Aucun champion"
 
+        # Season WR (Solo + Flex)
+        season_parts = []
+        if player.rank.wins + player.rank.losses > 0:
+            season_parts.append(f"Solo {player.rank.winrate:.0f}%")
+        if player.flex_rank.wins + player.flex_rank.losses > 0:
+            season_parts.append(f"Flex {player.flex_rank.winrate:.0f}%")
+        season_wr = " | ".join(season_parts) if season_parts else "Pas de données"
+
         # Winrate et KDA recents
         stats_line = f"WR: **{player.recent_winrate:.0f}%** | KDA: **{player.recent_kda:.2f}**"
 
-        value = f"{role_emoji} **{role_name}** | {rank_str}\n{stats_line}\n{champ_text}"
+        value = f"{role_emoji} **{role_name}** | {rank_str}\nSeason: **{season_wr}**\n{stats_line}\n{champ_text}"
 
         # op.gg link
         opgg_name = player.game_name.replace(' ', '%20')
