@@ -2,6 +2,8 @@
 Module pour le scouting d'equipes adverses en Clash
 """
 import asyncio
+import math
+import traceback
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Tuple
 from collections import defaultdict
@@ -112,6 +114,8 @@ class ClashScoutModule:
         self.api = riot_api
         self.data_dragon = data_dragon
         self.db = db_manager
+        # Limite le scraping à 1 requête à la fois pour éviter le 403
+        self.scrape_semaphore = asyncio.Semaphore(1)
 
     async def scout_enemy_team(self, riot_id: str, tag: str) -> ScoutResult:
         """
@@ -292,8 +296,14 @@ class ClashScoutModule:
             # Scrape season stats + analyse match history en parallele
             region = config.DEFAULT_REGION.lower().rstrip('0123456789')
             match_ids_to_use = match_ids[:config.DANGER_SCORE['RECENT_GAMES_COUNT']] if isinstance(match_ids, list) and match_ids else []
+
+            async def protected_scrape():
+                async with self.scrape_semaphore:
+                    await asyncio.sleep(2)  # Rate limit: 1 scrape toutes les 2s min
+                    return await asyncio.to_thread(scrape_champion_season_stats, game_name, tag_line, region)
+
             season_stats, match_champ_stats = await asyncio.gather(
-                asyncio.to_thread(scrape_champion_season_stats, game_name, tag_line, region),
+                protected_scrape(),
                 self._analyze_match_history(player, match_ids_to_use)
             )
             match_champ_stats = match_champ_stats or {}
@@ -380,7 +390,6 @@ class ClashScoutModule:
 
         except Exception as e:
             print(f"[ClashScout] Erreur fetch player {puuid}: {e}")
-            import traceback
             traceback.print_exc()
             return None
 
@@ -472,25 +481,6 @@ class ClashScoutModule:
 
         return champion_stats
 
-    def detect_role(self, matches: List[Dict[str, Any]], puuid: str) -> Dict[str, float]:
-        """Detecte la distribution des roles d'un joueur"""
-        role_counts = defaultdict(int)
-
-        for match in matches:
-            info = match.get('info', {})
-            for p in info.get('participants', []):
-                if p.get('puuid') == puuid:
-                    role = p.get('teamPosition', 'UNKNOWN')
-                    if role:
-                        role_counts[role] += 1
-                    break
-
-        total = sum(role_counts.values())
-        if total == 0:
-            return {}
-
-        return {role: (count / total) * 100 for role, count in role_counts.items()}
-
     def calculate_danger_score(
         self,
         champion: ChampionData,
@@ -518,19 +508,27 @@ class ClashScoutModule:
         # Winrate — préfère season si données suffisantes (>= 10 games)
         if champion.season_games >= 10:
             effective_wr = champion.season_winrate
+            effective_games = champion.season_games
         elif champion.games_played >= 3:
             effective_wr = champion.winrate
+            effective_games = champion.games_played
         else:
             effective_wr = 0.0
+            effective_games = 0
 
         if effective_wr > 0:
             wr_diff = effective_wr - cfg['WINRATE_NEUTRAL']
             if wr_diff > 0:
-                wr_score = int(wr_diff * cfg['WINRATE_SCORE_PER_PERCENT'])
+                # Score = Diff * Coeff * sqrt(Games)
+                # Ex: (75-50) * 2 * sqrt(10) = 50 * 3.16 = 158
+                # Ex: (64-50) * 2 * sqrt(95) = 28 * 9.7 = 271
+                games_factor = math.sqrt(effective_games)
+                wr_score = int(wr_diff * cfg['WINRATE_SCORE_PER_PERCENT'] * games_factor)
+                
                 score += wr_score
                 if wr_score > 0:
                     source = "saison" if champion.season_games >= 10 else "recent"
-                    reasons.append(f"{effective_wr:.0f}% WR ({source})")
+                    reasons.append(f"{effective_wr:.0f}% WR ({effective_games}g {source})")
 
         # Smurf detection — nécessite KDA (données match history uniquement)
         if (champion.mastery_points < cfg['SMURF_MASTERY_MAX'] and

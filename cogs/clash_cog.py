@@ -1,6 +1,7 @@
 """
 Cog pour les commandes Clash (team management et scouting)
 """
+import traceback
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -267,7 +268,6 @@ class ClashCog(commands.Cog):
 
         except Exception as e:
             print(f"[ClashScout] Erreur: {e}")
-            import traceback
             traceback.print_exc()
             await loading_msg.edit(
                 content=f":x: Erreur lors du scouting: {str(e)}"
@@ -355,7 +355,6 @@ class ClashCog(commands.Cog):
 
         except Exception as e:
             print(f"[ClashAnalyze] Erreur: {e}")
-            import traceback
             traceback.print_exc()
             await loading_msg.edit(
                 content=f":x: Erreur lors de l'analyse: {str(e)}"

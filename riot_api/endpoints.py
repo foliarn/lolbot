@@ -70,15 +70,6 @@ class RiotEndpoints:
 
         return result
 
-    async def get_league_entries(self, summoner_id: str) -> Optional[List[Dict[str, Any]]]:
-        """
-        DEPRECATED: Utiliser get_league_entries_by_puuid à la place
-        Récupère les rangs du joueur via summoner_id (ancien endpoint)
-        """
-        url = f"{self.platform_base}/lol/league/v4/entries/by-summoner/{summoner_id}"
-        cache_key = f"league:summoner:{summoner_id}"
-        return await self.client.request(url, cache_key, CACHE_TTL['RANK'])
-
     # ==================== CHAMPION-MASTERY-V4 ====================
 
     async def get_champion_masteries(self, puuid: str, count: int = 5) -> Optional[List[Dict[str, Any]]]:
@@ -108,7 +99,8 @@ class RiotEndpoints:
         puuid: str,
         start: int = 0,
         count: int = 20,
-        queue: Optional[int] = None
+        queue: Optional[int] = None,
+        start_time: Optional[int] = None
     ) -> Optional[List[str]]:
         """
         Récupère les IDs des derniers matchs
@@ -116,16 +108,19 @@ class RiotEndpoints:
         Args:
             puuid: PUUID du joueur
             start: Index de départ
-            count: Nombre de matchs
+            count: Nombre de matchs (max 100)
             queue: Type de queue (420=SoloQ, 440=Flex, 700=Clash)
+            start_time: Epoch timestamp en secondes (filtre les matchs apres cette date)
 
         Returns: List of match IDs
         """
         url = f"{self.regional_base}/lol/match/v5/matches/by-puuid/{puuid}/ids?start={start}&count={count}"
         if queue:
             url += f"&queue={queue}"
+        if start_time:
+            url += f"&startTime={start_time}"
 
-        cache_key = f"match_history:puuid:{puuid}:queue:{queue}:count:{count}"
+        cache_key = f"match_history:puuid:{puuid}:queue:{queue}:start:{start}:count:{count}:st:{start_time}"
         return await self.client.request(url, cache_key, CACHE_TTL['MATCH_HISTORY'])
 
     async def get_match(self, match_id: str) -> Optional[Dict[str, Any]]:
@@ -137,6 +132,16 @@ class RiotEndpoints:
         url = f"{self.regional_base}/lol/match/v5/matches/{match_id}"
         cache_key = f"match:{match_id}"
         return await self.client.request(url, cache_key, CACHE_TTL['MATCH_DETAIL'])
+
+    async def get_match_timeline(self, match_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Récupère la timeline d'un match (frames par minute, événements)
+
+        Returns: Timeline data avec 'info.frames' et 'info.frameInterval'
+        """
+        url = f"{self.regional_base}/lol/match/v5/matches/{match_id}/timeline"
+        cache_key = f"timeline:{match_id}"
+        return await self.client.request(url, cache_key, CACHE_TTL['MATCH_TIMELINE'])
 
     # ==================== SPECTATOR-V4 ====================
 

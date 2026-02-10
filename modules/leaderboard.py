@@ -373,3 +373,104 @@ class LeaderboardModule:
         lines.append("└" + "─" * 4 + "┴" + "─" * name_col + "┴" + "─" * 12 + "┴" + "─" * 14 + "┴" + "─" * 10 + "┴" + "─" * 10 + "┘")
 
         return "\n".join(lines)
+
+    async def generate_weekly_retrospective(self, week_start: str) -> discord.Embed:
+        """Genere un embed retrospective de la semaine avec les awards"""
+        # Get Solo/Duo leaderboard data (LP changes over the week)
+        solo_players = await self.get_leaderboard_data("RANKED_SOLO_5x5")
+
+        # Get weekly stats for all players
+        puuids = await self.db.get_all_registered_puuids()
+        player_stats = []
+
+        for puuid in puuids:
+            user = await self.db.get_user_by_puuid(puuid)
+            if not user:
+                continue
+
+            weekly = await self.db.get_all_weekly_stats(puuid, week_start)
+            if not weekly:
+                continue
+
+            games = weekly.get('games_played', {}).get('stat_value', 0)
+            if games < 1:
+                continue
+
+            kills = weekly.get('kills', {}).get('stat_value', 0)
+            deaths = weekly.get('deaths', {}).get('stat_value', 0)
+            assists = weekly.get('assists', {}).get('stat_value', 0)
+            wins = weekly.get('wins', {}).get('stat_value', 0)
+            losses = weekly.get('losses', {}).get('stat_value', 0)
+
+            total_games = wins + losses
+            winrate = (wins / total_games * 100) if total_games > 0 else 0
+            kda = ((kills + assists) / deaths) if deaths > 0 else kills + assists
+
+            # Find LP change from leaderboard data
+            lp_change = 0
+            for p in solo_players:
+                if p['puuid'] == puuid:
+                    lp_change = p['lp_change_week']
+                    break
+
+            player_stats.append({
+                'name': user['game_name'],
+                'games': int(total_games),
+                'kills': int(kills),
+                'deaths': int(deaths),
+                'assists': int(assists),
+                'kda': round(kda, 2),
+                'winrate': round(winrate, 1),
+                'wins': int(wins),
+                'losses': int(losses),
+                'lp_change': lp_change,
+            })
+
+        embed = discord.Embed(
+            title="Retrospective de la semaine",
+            color=discord.Color.purple(),
+            timestamp=datetime.now(PARIS_TZ)
+        )
+
+        if not player_stats:
+            embed.description = "Pas assez de donnees cette semaine."
+            return embed
+
+        awards = []
+
+        # Biggest climber (most LP gained)
+        climbers = [p for p in player_stats if p['lp_change'] > 0]
+        if climbers:
+            best = max(climbers, key=lambda p: p['lp_change'])
+            awards.append(f"📈 **Meilleur grimpeur** : {best['name']} (+{best['lp_change']} LP)")
+
+        # Biggest loser (most LP lost)
+        losers = [p for p in player_stats if p['lp_change'] < 0]
+        if losers:
+            worst = min(losers, key=lambda p: p['lp_change'])
+            awards.append(f"📉 **Plus grosse chute** : {worst['name']} ({worst['lp_change']} LP)")
+
+        # Best KDA (min 5 games)
+        kda_eligible = [p for p in player_stats if p['games'] >= 5]
+        if kda_eligible:
+            best_kda = max(kda_eligible, key=lambda p: p['kda'])
+            awards.append(f"⚔️ **Meilleur KDA** : {best_kda['name']} ({best_kda['kda']:.2f} KDA en {best_kda['games']} games)")
+
+        # Best winrate (min 5 games)
+        wr_eligible = [p for p in player_stats if p['games'] >= 5]
+        if wr_eligible:
+            best_wr = max(wr_eligible, key=lambda p: p['winrate'])
+            awards.append(f"🏆 **Meilleur winrate** : {best_wr['name']} ({best_wr['winrate']:.0f}% WR - {best_wr['wins']}W/{best_wr['losses']}L)")
+
+        # Most games played
+        most_games = max(player_stats, key=lambda p: p['games'])
+        awards.append(f"🎮 **No-life de la semaine** : {most_games['name']} ({most_games['games']} games)")
+
+        # Most deaths
+        most_deaths = max(player_stats, key=lambda p: p['deaths'])
+        if most_deaths['deaths'] > 0:
+            awards.append(f"💀 **Inting award** : {most_deaths['name']} ({most_deaths['deaths']} morts)")
+
+        embed.description = "\n".join(awards)
+
+        return embed

@@ -15,6 +15,7 @@ class DataDragon:
         self.cache_dir = "data_dragon_cache"
         self.current_version: Optional[str] = None
         self.champions: Optional[Dict[str, Any]] = None
+        self._id_to_name: Optional[Dict[int, str]] = None
         os.makedirs(self.cache_dir, exist_ok=True)
 
     async def get_latest_version(self) -> Optional[str]:
@@ -62,14 +63,8 @@ class DataDragon:
 
     async def get_champion_name_by_id(self, champion_id: int) -> Optional[str]:
         """Récupère le nom d'un champion à partir de son ID"""
-        if not self.champions:
-            await self.load_champions()
-
-        if self.champions:
-            for name, data in self.champions['data'].items():
-                if int(data['key']) == champion_id:
-                    return name
-        return None
+        id_map = await self.get_champion_id_to_name_map()
+        return id_map.get(champion_id)
 
     async def get_champion_id_by_name(self, champion_name: str) -> Optional[int]:
         """Récupère l'ID d'un champion à partir de son nom"""
@@ -89,6 +84,7 @@ class DataDragon:
 
         if self.current_version:
             self.champions = await self.fetch_champion_data(self.current_version)
+            self._id_to_name = None  # Invalidate cached map
 
     async def get_all_champion_names(self) -> List[str]:
         """Récupère la liste de tous les noms de champions"""
@@ -101,11 +97,15 @@ class DataDragon:
 
     async def get_champion_id_to_name_map(self) -> Dict[int, str]:
         """Retourne un dictionnaire {champion_id: champion_name}"""
+        if self._id_to_name is not None:
+            return self._id_to_name
+
         if not self.champions:
             await self.load_champions()
 
         if self.champions:
-            return {int(data['key']): name for name, data in self.champions['data'].items()}
+            self._id_to_name = {int(data['key']): name for name, data in self.champions['data'].items()}
+            return self._id_to_name
         return {}
 
     async def compare_versions(self, old_version: str, new_version: str) -> Dict[str, Dict[str, Any]]:

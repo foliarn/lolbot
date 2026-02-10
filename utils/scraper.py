@@ -14,9 +14,20 @@ def scrape_champion_season_stats(game_name: str, tag_line: str, region: str = "e
     Returns: {champion_name: {'games': int, 'winrate': float}}
     """
     try:
-        scraper = cloudscraper.create_scraper()
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'desktop': True
+            }
+        )
+        scraper.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.leagueofgraphs.com/',
+        })
         url_name = game_name.replace(' ', '+')
-        url = f"https://www.leagueofgraphs.com/fr/summoner/champions/{region}/{url_name}-{tag_line}"
+        url = f"https://www.leagueofgraphs.com/summoner/champions/{region}/{url_name}-{tag_line}"
 
         resp = scraper.get(url, timeout=15)
         if resp.status_code != 200:

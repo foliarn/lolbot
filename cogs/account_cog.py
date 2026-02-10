@@ -1,6 +1,7 @@
 """
 Cog pour la gestion des comptes Riot
 """
+import traceback
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -97,7 +98,6 @@ class AccountCog(commands.Cog):
             print(f"[Link] Résultat DB add_user: {success}")
         except Exception as e:
             print(f"[Link] Erreur DB: {e}")
-            import traceback
             traceback.print_exc()
             await interaction.followup.send(
                 f"Erreur lors de l'enregistrement: {e}",

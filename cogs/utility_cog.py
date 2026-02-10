@@ -1,6 +1,7 @@
 """
 Cog pour les commandes utilitaires (stats, leaderboard)
 """
+import traceback
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -79,7 +80,6 @@ class UtilityCog(commands.Cog):
 
         except Exception as e:
             print(f"[Leaderboard] Erreur: {e}")
-            import traceback
             traceback.print_exc()
             await interaction.followup.send(f"Erreur lors de la generation du leaderboard: {e}", ephemeral=True)
 

@@ -4,59 +4,117 @@ Client HTTP asynchrone avec rate limiting pour l'API Riot
 import aiohttp
 import asyncio
 import time
+from collections import deque
 from typing import Optional, Dict, Any
 from config import RATE_LIMIT
 
 
 class RateLimiter:
-    """Gestionnaire de rate limiting avec Token Bucket"""
+    """
+    Gestionnaire de rate limiting avec sliding window.
+
+    Tracks actual API call timestamps and waits when approaching limits.
+    - 20 requests per second
+    - 100 requests per 2 minutes
+    """
 
     def __init__(self):
-        self.tokens_per_second = RATE_LIMIT['REQUESTS_PER_SECOND']
-        self.tokens_per_two_minutes = RATE_LIMIT['REQUESTS_PER_TWO_MINUTES']
+        self.limit_per_second = RATE_LIMIT['REQUESTS_PER_SECOND']  # 20
+        self.limit_per_two_minutes = RATE_LIMIT['REQUESTS_PER_TWO_MINUTES']  # 100
 
-        # Token bucket pour 1 seconde
-        self.tokens_1s = self.tokens_per_second
-        self.last_update_1s = time.time()
-
-        # Token bucket pour 2 minutes
-        self.tokens_2m = self.tokens_per_two_minutes
-        self.last_update_2m = time.time()
-
+        # Sliding window: store timestamps of all calls
+        self.call_timestamps: deque = deque()
         self.lock = asyncio.Lock()
 
+        # Stats
+        self.total_calls = 0
+        self.total_waits = 0
+
+    def _cleanup_old_calls(self, now: float):
+        """Remove calls older than 2 minutes"""
+        cutoff = now - 120.0
+        while self.call_timestamps and self.call_timestamps[0] < cutoff:
+            self.call_timestamps.popleft()
+
+    def _count_calls_in_window(self, now: float, window_seconds: float) -> int:
+        """Count calls in the last N seconds"""
+        cutoff = now - window_seconds
+        count = 0
+        # Count from the end (most recent) backwards
+        for ts in reversed(self.call_timestamps):
+            if ts >= cutoff:
+                count += 1
+            else:
+                break
+        return count
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get current rate limit status"""
+        now = time.time()
+        self._cleanup_old_calls(now)
+
+        calls_1s = self._count_calls_in_window(now, 1.0)
+        calls_2m = len(self.call_timestamps)
+
+        return {
+            'calls_last_second': calls_1s,
+            'calls_last_2min': calls_2m,
+            'limit_per_second': self.limit_per_second,
+            'limit_per_2min': self.limit_per_two_minutes,
+            'available_1s': self.limit_per_second - calls_1s,
+            'available_2m': self.limit_per_two_minutes - calls_2m,
+            'total_calls': self.total_calls,
+            'total_waits': self.total_waits,
+        }
+
     async def acquire(self):
-        """Attend qu'un token soit disponible"""
+        """
+        Wait until we can make a call without exceeding rate limits.
+        Returns immediately if under limits, waits if at limit.
+        """
         async with self.lock:
             while True:
                 now = time.time()
+                self._cleanup_old_calls(now)
 
-                # Recharger les tokens pour la limite 1s
-                elapsed_1s = now - self.last_update_1s
-                if elapsed_1s >= 1.0:
-                    self.tokens_1s = self.tokens_per_second
-                    self.last_update_1s = now
+                calls_1s = self._count_calls_in_window(now, 1.0)
+                calls_2m = len(self.call_timestamps)
 
-                # Recharger les tokens pour la limite 2m
-                elapsed_2m = now - self.last_update_2m
-                if elapsed_2m >= 120.0:
-                    self.tokens_2m = self.tokens_per_two_minutes
-                    self.last_update_2m = now
-
-                # Vérifier si on peut consommer un token
-                if self.tokens_1s > 0 and self.tokens_2m > 0:
-                    self.tokens_1s -= 1
-                    self.tokens_2m -= 1
+                # Check if we can make a call
+                if calls_1s < self.limit_per_second and calls_2m < self.limit_per_two_minutes:
+                    # Record this call
+                    self.call_timestamps.append(now)
+                    self.total_calls += 1
                     return
 
-                # Calculer le temps d'attente
-                wait_time = min(
-                    1.0 - elapsed_1s if self.tokens_1s <= 0 else 0,
-                    120.0 - elapsed_2m if self.tokens_2m <= 0 else 0
-                )
+                # Need to wait - calculate how long
+                wait_time = 0.0
+
+                if calls_1s >= self.limit_per_second:
+                    # Wait until oldest call in last second expires
+                    oldest_in_1s = None
+                    cutoff_1s = now - 1.0
+                    for ts in self.call_timestamps:
+                        if ts >= cutoff_1s:
+                            oldest_in_1s = ts
+                            break
+                    if oldest_in_1s:
+                        wait_time = max(wait_time, (oldest_in_1s + 1.0) - now + 0.01)
+
+                if calls_2m >= self.limit_per_two_minutes:
+                    # Wait until oldest call expires from 2min window
+                    if self.call_timestamps:
+                        oldest = self.call_timestamps[0]
+                        wait_time = max(wait_time, (oldest + 120.0) - now + 0.01)
 
                 if wait_time > 0:
+                    self.total_waits += 1
+                    remaining_2m = self.limit_per_two_minutes - calls_2m
+                    print(f"[RateLimit] Waiting {wait_time:.1f}s... ({calls_2m}/100 calls in 2min, {remaining_2m} remaining)")
                     await asyncio.sleep(wait_time)
+                else:
+                    # Small sleep to prevent tight loop
+                    await asyncio.sleep(0.05)
 
 
 class RiotAPIClient:
@@ -84,7 +142,8 @@ class RiotAPIClient:
         url: str,
         cache_key: Optional[str] = None,
         cache_ttl: Optional[int] = None,
-        use_rate_limit: bool = True
+        use_rate_limit: bool = True,
+        _retries: int = 0
     ) -> Optional[Dict[str, Any]]:
         """
         Effectue une requête HTTP avec cache et rate limiting
@@ -94,10 +153,13 @@ class RiotAPIClient:
             cache_key: Clé pour le cache (optionnel)
             cache_ttl: Durée de vie du cache en secondes (optionnel)
             use_rate_limit: Utiliser le rate limiter (défaut: True)
+            _retries: Compteur interne de retries (ne pas utiliser directement)
 
         Returns:
             Réponse JSON ou None en cas d'erreur
         """
+        MAX_RETRIES = 3
+
         # Vérifier le cache
         if cache_key and self.db_manager:
             cached = await self.db_manager.get_cache(cache_key)
@@ -129,10 +191,14 @@ class RiotAPIClient:
                     return data
 
                 elif response.status == 429:
+                    if _retries >= MAX_RETRIES:
+                        print(f"[API] Rate limit: max retries ({MAX_RETRIES}) atteint pour {url}")
+                        return None
                     # Rate limit dépassé, attendre
                     retry_after = int(response.headers.get('Retry-After', 1))
+                    print(f"[API] Rate limit 429, retry dans {retry_after}s (tentative {_retries + 1}/{MAX_RETRIES})")
                     await asyncio.sleep(retry_after)
-                    return await self.request(url, cache_key, cache_ttl, use_rate_limit=False)
+                    return await self.request(url, cache_key, cache_ttl, use_rate_limit=False, _retries=_retries + 1)
 
                 elif response.status == 404:
                     return None
@@ -158,3 +224,7 @@ class RiotAPIClient:
         """
         tasks = [self.request(url, use_rate_limit=use_rate_limit) for url in urls]
         return await asyncio.gather(*tasks)
+
+    def get_rate_limit_status(self) -> Dict[str, Any]:
+        """Get current rate limit status"""
+        return self.rate_limiter.get_status()
