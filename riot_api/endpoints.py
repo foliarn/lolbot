@@ -151,8 +151,9 @@ class RiotEndpoints:
 
         Returns: Game data ou None si pas en partie
         """
-        url = f"{self.platform_base}/lol/spectator/v4/active-games/by-summoner/{puuid}"
-        return await self.client.request(url, use_rate_limit=True)
+        url = f"{self.platform_base}/lol/spectator/v5/active-games/by-summoner/{puuid}"
+        cache_key = f"live_game:puuid:{puuid}"
+        return await self.client.request(url, cache_key, CACHE_TTL['LIVE_GAME'])
 
     # ==================== CLASH-V1 ====================
 

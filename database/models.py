@@ -87,109 +87,25 @@ CREATE TABLE IF NOT EXISTS tilt_tracker (
 
 CREATE INDEX IF NOT EXISTS idx_tilt_tracker_puuid ON tilt_tracker(riot_puuid);
 
--- ==================== WEEKLY CHALLENGES ====================
+-- ==================== REPUTATION ====================
 
--- Active challenges for the current week
-CREATE TABLE IF NOT EXISTS weekly_challenges (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    challenge_id TEXT NOT NULL,             -- e.g., 'juif', 'rekkles', 'climb'
-    challenge_type TEXT NOT NULL,           -- 'global' or 'personal'
-    week_start DATE NOT NULL,               -- Monday of the week
-    assigned_to TEXT,                       -- discord_id for personal challenges, NULL for global
-    is_active BOOLEAN DEFAULT 1,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(challenge_id, week_start, assigned_to)
+-- Current reputation score per player (0-100, starts at 50)
+CREATE TABLE IF NOT EXISTS player_reputation (
+    discord_id TEXT PRIMARY KEY,
+    score REAL DEFAULT 50.0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_weekly_challenges_week ON weekly_challenges(week_start);
-CREATE INDEX IF NOT EXISTS idx_weekly_challenges_assigned ON weekly_challenges(assigned_to);
-
--- Track challenge completions
-CREATE TABLE IF NOT EXISTS challenge_completions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    challenge_id TEXT NOT NULL,
-    week_start DATE NOT NULL,
-    discord_id TEXT NOT NULL,
-    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_first BOOLEAN DEFAULT 0,             -- First to complete (for global challenges)
-    points_awarded INTEGER DEFAULT 0,
-    UNIQUE(challenge_id, week_start, discord_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_challenge_completions_week ON challenge_completions(week_start);
-CREATE INDEX IF NOT EXISTS idx_challenge_completions_discord ON challenge_completions(discord_id);
-
--- Cumulative challenge points per season split
-CREATE TABLE IF NOT EXISTS challenge_points (
+-- Event log: what changed the score and by how much
+CREATE TABLE IF NOT EXISTS reputation_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     discord_id TEXT NOT NULL,
-    season_split TEXT NOT NULL,             -- e.g., '2024_split1'
-    total_points INTEGER DEFAULT 0,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(discord_id, season_split)
+    event_type TEXT NOT NULL,   -- 'lp_change', 'game_kda', 'weekly_winrate'
+    delta REAL NOT NULL,
+    context TEXT,               -- JSON context (champion, kda, lp_change, etc.)
+    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_challenge_points_discord ON challenge_points(discord_id);
-CREATE INDEX IF NOT EXISTS idx_challenge_points_season ON challenge_points(season_split);
-
--- Weekly stats cache for challenge progress tracking
-CREATE TABLE IF NOT EXISTS weekly_stats_cache (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    riot_puuid TEXT NOT NULL,
-    week_start DATE NOT NULL,
-    stat_type TEXT NOT NULL,                -- 'gold', 'towers', 'kda', 'games', etc.
-    stat_value REAL DEFAULT 0,
-    games_counted INTEGER DEFAULT 0,
-    last_match_id TEXT,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(riot_puuid, week_start, stat_type)
-);
-
-CREATE INDEX IF NOT EXISTS idx_weekly_stats_puuid ON weekly_stats_cache(riot_puuid);
-CREATE INDEX IF NOT EXISTS idx_weekly_stats_week ON weekly_stats_cache(week_start);
-
--- Split-wide stats cache (persists across weeks within a split)
-CREATE TABLE IF NOT EXISTS split_stats_cache (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    riot_puuid TEXT NOT NULL,
-    season_split TEXT NOT NULL,             -- e.g., '2025_split1'
-    stat_type TEXT NOT NULL,
-    stat_value REAL DEFAULT 0,
-    games_counted INTEGER DEFAULT 0,
-    last_match_id TEXT,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(riot_puuid, season_split, stat_type)
-);
-
-CREATE INDEX IF NOT EXISTS idx_split_stats_puuid ON split_stats_cache(riot_puuid);
-CREATE INDEX IF NOT EXISTS idx_split_stats_split ON split_stats_cache(season_split);
-
--- ==================== TRAINING EXERCISES ====================
-
--- Player exercise subscriptions (which exercises are enabled)
-CREATE TABLE IF NOT EXISTS exercise_tracking (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    riot_puuid TEXT NOT NULL,
-    exercise_id TEXT NOT NULL,
-    enabled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_match_id TEXT,
-    UNIQUE(riot_puuid, exercise_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_exercise_tracking_puuid ON exercise_tracking(riot_puuid);
-
--- Per-game exercise results
-CREATE TABLE IF NOT EXISTS exercise_attempts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    riot_puuid TEXT NOT NULL,
-    exercise_id TEXT NOT NULL,
-    match_id TEXT NOT NULL,
-    success BOOLEAN NOT NULL,
-    match_timestamp INTEGER NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(riot_puuid, exercise_id, match_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_exercise_attempts_puuid ON exercise_attempts(riot_puuid);
-CREATE INDEX IF NOT EXISTS idx_exercise_attempts_exercise ON exercise_attempts(exercise_id);
+CREATE INDEX IF NOT EXISTS idx_reputation_events_discord ON reputation_events(discord_id);
+CREATE INDEX IF NOT EXISTS idx_reputation_events_date ON reputation_events(recorded_at);
 """

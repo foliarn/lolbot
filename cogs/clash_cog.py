@@ -266,6 +266,11 @@ class ClashCog(commands.Cog):
             # Supprimer le message de chargement et envoyer les embeds
             await loading_msg.edit(content=None, embeds=embeds)
 
+            # Commentaire LLM
+            if hasattr(self.bot, 'commentary'):
+                llm_msg = await self.bot.commentary.clash_commentary(result)
+                await interaction.followup.send(llm_msg)
+
         except Exception as e:
             print(f"[ClashScout] Erreur: {e}")
             traceback.print_exc()

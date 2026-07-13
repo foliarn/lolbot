@@ -473,262 +473,6 @@ class DatabaseManager:
             )
             await db.commit()
 
-    # ==================== Weekly Challenges ====================
-
-    async def get_weekly_challenges(self, week_start: str, discord_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Recupere les challenges de la semaine"""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            if discord_id:
-                # Get global + personal challenges for this user
-                cursor = await db.execute(
-                    """SELECT * FROM weekly_challenges
-                    WHERE week_start = ? AND is_active = 1
-                    AND (challenge_type = 'global' OR assigned_to = ?)
-                    ORDER BY challenge_type DESC, challenge_id""",
-                    (week_start, discord_id)
-                )
-            else:
-                # Get all challenges
-                cursor = await db.execute(
-                    """SELECT * FROM weekly_challenges
-                    WHERE week_start = ? AND is_active = 1
-                    ORDER BY challenge_type DESC, challenge_id""",
-                    (week_start,)
-                )
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
-
-    async def create_weekly_challenge(
-        self,
-        challenge_id: str,
-        challenge_type: str,
-        week_start: str,
-        assigned_to: Optional[str] = None
-    ) -> bool:
-        """Cree un challenge pour la semaine"""
-        async with aiosqlite.connect(self.db_path) as db:
-            try:
-                await db.execute(
-                    """INSERT INTO weekly_challenges
-                    (challenge_id, challenge_type, week_start, assigned_to)
-                    VALUES (?, ?, ?, ?)""",
-                    (challenge_id, challenge_type, week_start, assigned_to)
-                )
-                await db.commit()
-                return True
-            except aiosqlite.IntegrityError:
-                return False
-
-    async def deactivate_week_challenges(self, week_start: str):
-        """Desactive tous les challenges d'une semaine"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE weekly_challenges SET is_active = 0 WHERE week_start = ?",
-                (week_start,)
-            )
-            await db.commit()
-
-    # ==================== Challenge Completions ====================
-
-    async def get_challenge_completion(
-        self,
-        challenge_id: str,
-        week_start: str,
-        discord_id: str
-    ) -> Optional[Dict[str, Any]]:
-        """Verifie si un joueur a complete un challenge"""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                """SELECT * FROM challenge_completions
-                WHERE challenge_id = ? AND week_start = ? AND discord_id = ?""",
-                (challenge_id, week_start, discord_id)
-            )
-            row = await cursor.fetchone()
-            return dict(row) if row else None
-
-    async def get_challenge_completions_for_week(
-        self,
-        challenge_id: str,
-        week_start: str
-    ) -> List[Dict[str, Any]]:
-        """Recupere toutes les completions d'un challenge pour une semaine"""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                """SELECT * FROM challenge_completions
-                WHERE challenge_id = ? AND week_start = ?
-                ORDER BY completed_at ASC""",
-                (challenge_id, week_start)
-            )
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
-
-    async def record_challenge_completion(
-        self,
-        challenge_id: str,
-        week_start: str,
-        discord_id: str,
-        is_first: bool,
-        points_awarded: int
-    ) -> bool:
-        """Enregistre la completion d'un challenge"""
-        async with aiosqlite.connect(self.db_path) as db:
-            try:
-                await db.execute(
-                    """INSERT INTO challenge_completions
-                    (challenge_id, week_start, discord_id, is_first, points_awarded)
-                    VALUES (?, ?, ?, ?, ?)""",
-                    (challenge_id, week_start, discord_id, is_first, points_awarded)
-                )
-                await db.commit()
-                return True
-            except aiosqlite.IntegrityError:
-                return False
-
-    # ==================== Challenge Points ====================
-
-    async def get_challenge_points(
-        self,
-        discord_id: str,
-        season_split: str
-    ) -> int:
-        """Recupere les points d'un joueur pour une saison"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """SELECT total_points FROM challenge_points
-                WHERE discord_id = ? AND season_split = ?""",
-                (discord_id, season_split)
-            )
-            row = await cursor.fetchone()
-            return row[0] if row else 0
-
-    async def add_challenge_points(
-        self,
-        discord_id: str,
-        season_split: str,
-        points: int
-    ):
-        """Ajoute des points a un joueur"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO challenge_points (discord_id, season_split, total_points, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(discord_id, season_split)
-                DO UPDATE SET total_points = total_points + ?, updated_at = CURRENT_TIMESTAMP""",
-                (discord_id, season_split, points, points)
-            )
-            await db.commit()
-
-    async def get_challenge_leaderboard(
-        self,
-        season_split: str,
-        limit: int = 20
-    ) -> List[Dict[str, Any]]:
-        """Recupere le leaderboard des challenges"""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                """SELECT cp.discord_id, cp.total_points, u.game_name, u.tag_line
-                FROM challenge_points cp
-                LEFT JOIN users u ON cp.discord_id = u.discord_id AND u.is_primary = 1
-                WHERE cp.season_split = ?
-                ORDER BY cp.total_points DESC
-                LIMIT ?""",
-                (season_split, limit)
-            )
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
-
-    async def apply_penalty_to_all(self, season_split: str, penalty_points: int):
-        """Applique une penalite a tous les joueurs enregistres"""
-        async with aiosqlite.connect(self.db_path) as db:
-            # Get all registered discord_ids
-            cursor = await db.execute(
-                "SELECT DISTINCT discord_id FROM users WHERE is_primary = 1"
-            )
-            rows = await cursor.fetchall()
-
-            for row in rows:
-                discord_id = row[0]
-                await db.execute(
-                    """INSERT INTO challenge_points (discord_id, season_split, total_points, updated_at)
-                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(discord_id, season_split)
-                    DO UPDATE SET total_points = total_points + ?, updated_at = CURRENT_TIMESTAMP""",
-                    (discord_id, season_split, penalty_points, penalty_points)
-                )
-
-            await db.commit()
-
-    # ==================== Weekly Stats Cache ====================
-
-    async def get_weekly_stat(
-        self,
-        riot_puuid: str,
-        week_start: str,
-        stat_type: str
-    ) -> Optional[Dict[str, Any]]:
-        """Recupere une stat hebdomadaire cachee"""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                """SELECT * FROM weekly_stats_cache
-                WHERE riot_puuid = ? AND week_start = ? AND stat_type = ?""",
-                (riot_puuid, week_start, stat_type)
-            )
-            row = await cursor.fetchone()
-            return dict(row) if row else None
-
-    async def update_weekly_stat(
-        self,
-        riot_puuid: str,
-        week_start: str,
-        stat_type: str,
-        stat_value: float,
-        games_counted: int,
-        last_match_id: str
-    ):
-        """Met a jour une stat hebdomadaire"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO weekly_stats_cache
-                (riot_puuid, week_start, stat_type, stat_value, games_counted, last_match_id, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(riot_puuid, week_start, stat_type)
-                DO UPDATE SET stat_value = ?, games_counted = ?, last_match_id = ?, updated_at = CURRENT_TIMESTAMP""",
-                (riot_puuid, week_start, stat_type, stat_value, games_counted, last_match_id,
-                 stat_value, games_counted, last_match_id)
-            )
-            await db.commit()
-
-    async def get_all_weekly_stats(
-        self,
-        riot_puuid: str,
-        week_start: str
-    ) -> Dict[str, Dict[str, Any]]:
-        """Recupere toutes les stats hebdomadaires d'un joueur"""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                """SELECT * FROM weekly_stats_cache
-                WHERE riot_puuid = ? AND week_start = ?""",
-                (riot_puuid, week_start)
-            )
-            rows = await cursor.fetchall()
-            return {row['stat_type']: dict(row) for row in rows}
-
-    async def clear_old_weekly_stats(self, weeks_to_keep: int = 4):
-        """Nettoie les stats hebdomadaires anciennes"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """DELETE FROM weekly_stats_cache
-                WHERE week_start < date('now', ? || ' days')""",
-                (f"-{weeks_to_keep * 7}",)
-            )
-            await db.commit()
-
     async def get_all_primary_users(self) -> List[Dict[str, Any]]:
         """Recupere tous les utilisateurs avec leur compte principal"""
         async with aiosqlite.connect(self.db_path) as db:
@@ -739,182 +483,70 @@ class DatabaseManager:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
-    # ==================== Split Stats Cache ====================
+    # ==================== Reputation ====================
 
-    async def get_split_stat(
-        self,
-        riot_puuid: str,
-        season_split: str,
-        stat_type: str
-    ) -> Optional[Dict[str, Any]]:
-        """Recupere une stat de split cachee"""
+    async def get_reputation_score(self, discord_id: str) -> Optional[float]:
+        """Retourne le score de reputation d'un joueur (None si pas encore de score)"""
         async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                """SELECT * FROM split_stats_cache
-                WHERE riot_puuid = ? AND season_split = ? AND stat_type = ?""",
-                (riot_puuid, season_split, stat_type)
+                "SELECT score FROM player_reputation WHERE discord_id = ?",
+                (discord_id,)
             )
             row = await cursor.fetchone()
-            return dict(row) if row else None
+            return row[0] if row else None
 
-    async def update_split_stat(
-        self,
-        riot_puuid: str,
-        season_split: str,
-        stat_type: str,
-        stat_value: float,
-        games_counted: int,
-        last_match_id: str
-    ):
-        """Met a jour une stat de split"""
+    async def set_reputation(self, discord_id: str, score: float):
+        """Met a jour le score de reputation d'un joueur"""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                """INSERT INTO split_stats_cache
-                (riot_puuid, season_split, stat_type, stat_value, games_counted, last_match_id, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(riot_puuid, season_split, stat_type)
-                DO UPDATE SET stat_value = ?, games_counted = ?, last_match_id = ?, updated_at = CURRENT_TIMESTAMP""",
-                (riot_puuid, season_split, stat_type, stat_value, games_counted, last_match_id,
-                 stat_value, games_counted, last_match_id)
+                """INSERT INTO player_reputation (discord_id, score, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(discord_id) DO UPDATE SET
+                    score = excluded.score,
+                    updated_at = CURRENT_TIMESTAMP""",
+                (discord_id, score)
             )
             await db.commit()
 
-    async def get_all_split_stats(
-        self,
-        riot_puuid: str,
-        season_split: str
-    ) -> Dict[str, Dict[str, Any]]:
-        """Recupere toutes les stats de split d'un joueur"""
+    async def add_reputation_event(self, discord_id: str, event_type: str, delta: float, context: dict):
+        """Enregistre un evenement de reputation"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO reputation_events (discord_id, event_type, delta, context)
+                VALUES (?, ?, ?, ?)""",
+                (discord_id, event_type, delta, json.dumps(context))
+            )
+            await db.commit()
+
+    async def get_recent_reputation_events(self, discord_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Retourne les derniers evenements de reputation d'un joueur"""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                """SELECT * FROM split_stats_cache
-                WHERE riot_puuid = ? AND season_split = ?""",
-                (riot_puuid, season_split)
+                """SELECT event_type, delta, context, recorded_at
+                FROM reputation_events
+                WHERE discord_id = ?
+                ORDER BY recorded_at DESC LIMIT ?""",
+                (discord_id, limit)
             )
             rows = await cursor.fetchall()
-            return {row['stat_type']: dict(row) for row in rows}
+            result = []
+            for row in rows:
+                r = dict(row)
+                r['context'] = json.loads(r['context']) if r['context'] else {}
+                result.append(r)
+            return result
 
-    async def reset_all_challenge_points(self, season_split: str):
-        """Reset tous les scores de challenges a 0 pour un split"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE challenge_points SET total_points = 0, updated_at = CURRENT_TIMESTAMP WHERE season_split = ?",
-                (season_split,)
-            )
-            await db.commit()
-
-    async def reset_split_stats(self, season_split: str):
-        """Reset toutes les stats d'un split (pour nouveau split)"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "DELETE FROM split_stats_cache WHERE season_split = ?",
-                (season_split,)
-            )
-            await db.commit()
-
-    # ==================== Training Exercises ====================
-
-    async def enable_exercise(self, riot_puuid: str, exercise_id: str) -> bool:
-        """Active le tracking d'un exercice pour un joueur"""
-        async with aiosqlite.connect(self.db_path) as db:
-            try:
-                await db.execute(
-                    """INSERT INTO exercise_tracking (riot_puuid, exercise_id)
-                    VALUES (?, ?)""",
-                    (riot_puuid, exercise_id)
-                )
-                await db.commit()
-                return True
-            except aiosqlite.IntegrityError:
-                return False
-
-    async def disable_exercise(self, riot_puuid: str, exercise_id: str) -> bool:
-        """Desactive le tracking d'un exercice pour un joueur"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "DELETE FROM exercise_tracking WHERE riot_puuid = ? AND exercise_id = ?",
-                (riot_puuid, exercise_id)
-            )
-            await db.commit()
-            return cursor.rowcount > 0
-
-    async def get_enabled_exercises(self, riot_puuid: str) -> List[Dict[str, Any]]:
-        """Recupere les exercices actives d'un joueur"""
+    async def get_all_reputations(self) -> List[Dict[str, Any]]:
+        """Retourne les scores de tous les joueurs (pour affichage leaderboard)"""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT * FROM exercise_tracking WHERE riot_puuid = ?",
-                (riot_puuid,)
+                """SELECT r.discord_id, r.score, u.game_name
+                FROM player_reputation r
+                LEFT JOIN users u ON u.discord_id = r.discord_id AND u.is_primary = 1
+                ORDER BY r.score ASC"""
             )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
-    async def get_all_exercise_users(self) -> List[str]:
-        """Recupere tous les PUUIDs ayant au moins un exercice active"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT DISTINCT riot_puuid FROM exercise_tracking"
-            )
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
-
-    async def update_exercise_last_match(self, riot_puuid: str, exercise_id: str, last_match_id: str):
-        """Met a jour le curseur de dernier match traite pour un exercice"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """UPDATE exercise_tracking SET last_match_id = ?
-                WHERE riot_puuid = ? AND exercise_id = ?""",
-                (last_match_id, riot_puuid, exercise_id)
-            )
-            await db.commit()
-
-    async def record_exercise_attempt(
-        self,
-        riot_puuid: str,
-        exercise_id: str,
-        match_id: str,
-        success: bool,
-        match_timestamp: int
-    ) -> bool:
-        """Enregistre une tentative d'exercice"""
-        async with aiosqlite.connect(self.db_path) as db:
-            try:
-                await db.execute(
-                    """INSERT INTO exercise_attempts
-                    (riot_puuid, exercise_id, match_id, success, match_timestamp)
-                    VALUES (?, ?, ?, ?, ?)""",
-                    (riot_puuid, exercise_id, match_id, success, match_timestamp)
-                )
-                await db.commit()
-                return True
-            except aiosqlite.IntegrityError:
-                return False
-
-    async def get_exercise_stats(self, riot_puuid: str, exercise_id: str) -> Dict[str, int]:
-        """Recupere les stats d'un exercice (total et succes)"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """SELECT COUNT(*) as total, SUM(CASE WHEN success THEN 1 ELSE 0 END) as success
-                FROM exercise_attempts
-                WHERE riot_puuid = ? AND exercise_id = ?""",
-                (riot_puuid, exercise_id)
-            )
-            row = await cursor.fetchone()
-            return {'total': row[0] or 0, 'success': row[1] or 0}
-
-    async def get_all_exercise_stats(self, riot_puuid: str) -> Dict[str, Dict[str, int]]:
-        """Recupere les stats de tous les exercices d'un joueur"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """SELECT exercise_id,
-                       COUNT(*) as total,
-                       SUM(CASE WHEN success THEN 1 ELSE 0 END) as success
-                FROM exercise_attempts
-                WHERE riot_puuid = ?
-                GROUP BY exercise_id""",
-                (riot_puuid,)
-            )
-            rows = await cursor.fetchall()
-            return {row[0]: {'total': row[1] or 0, 'success': row[2] or 0} for row in rows}

@@ -2,7 +2,7 @@
 Module pour le leaderboard quotidien
 """
 import discord
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any, Tuple
 from zoneinfo import ZoneInfo
 
@@ -136,13 +136,14 @@ class LeaderboardModule:
         puuids = await self.db.get_all_registered_puuids()
         now = datetime.now(PARIS_TZ)
 
-        # Il y a exactement 24 heures
-        time_24h_ago = now - timedelta(hours=24)
+        # Il y a exactement 24 heures (converti en UTC naive pour comparaison SQLite)
+        time_24h_ago_utc = (now - timedelta(hours=24)).astimezone(timezone.utc).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M:%S')
 
-        # Lundi de cette semaine a minuit
+        # Lundi de cette semaine a minuit (converti en UTC naive pour comparaison SQLite)
         days_since_monday = now.weekday()
         monday = now - timedelta(days=days_since_monday)
         monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
+        monday_utc = monday.astimezone(timezone.utc).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M:%S')
 
         players = []
 
@@ -172,7 +173,7 @@ class LeaderboardModule:
 
                 # Rang il y a 24h
                 rank_24h_ago = await self.db.get_rank_at_time(
-                    puuid, queue_type, time_24h_ago.isoformat()
+                    puuid, queue_type, time_24h_ago_utc
                 )
                 lp_24h_ago = rank_to_lp(
                     rank_24h_ago.get('tier', '') if rank_24h_ago else '',
@@ -182,7 +183,7 @@ class LeaderboardModule:
 
                 # Rang du lundi
                 rank_monday = await self.db.get_rank_at_time(
-                    puuid, queue_type, monday.isoformat()
+                    puuid, queue_type, monday_utc
                 )
                 lp_monday = rank_to_lp(
                     rank_monday.get('tier', '') if rank_monday else '',
@@ -210,6 +211,7 @@ class LeaderboardModule:
 
                 players.append({
                     'puuid': puuid,
+                    'discord_id': user['discord_id'],
                     'username': f"{user['game_name']}#{user['tag_line']}",
                     'display_name': user['game_name'],
                     'tier': current_rank.get('tier', ''),
